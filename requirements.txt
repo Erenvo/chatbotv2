@@ -1,0 +1,13 @@
+streamlit
+pypdf2
+langchain
+langchain-google-genai
+faiss-cpu
+tiktoken
+numpy<2.0
+uuid
+requests         # YENİ
+beautifulsoup4   # YENİ
+lxml             # YENİ (BeautifulSoup için)
+trafilatura    # İsteğe bağlı, daha gelişmiş web scraping için
+langchain_community
