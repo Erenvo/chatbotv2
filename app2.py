@@ -1,3 +1,5 @@
+# --- START OF FILE app2.py ---
+
 import streamlit as st
 # from openai import OpenAI # Eğer farklı bir LLM sağlayıcı kullanacaksanız
 import os
@@ -11,6 +13,7 @@ import traceback
 import uuid
 import requests
 from bs4 import BeautifulSoup
+from duckduckgo_search import DDGS # YENİ: DuckDuckGo arama için
 # import trafilatura
 
 # -----------------------------------------------------------------------------
@@ -34,13 +37,8 @@ try:
     llm_client = ChatGoogleGenerativeAI(
         model=GOOGLE_LLM_MODEL_NAME,
         google_api_key=GOOGLE_API_KEY,
-        temperature=0.15, # Gerçeklere dayalı cevaplar için düşük, özet için biraz esneklik
-        # safety_settings={ # İsteğe bağlı, zararlı içerik filtrelerini ayarlamak için
-        #     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-        #     HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-        #     HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-        #     HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-        # } # GoogleGenerativeAI için HarmCategory ve HarmBlockThreshold import edilmeli
+        temperature=0.2, # Özetleme için biraz daha yüksek olabilir
+        # safety_settings={ ... }
     )
     embeddings_model_global = GoogleGenerativeAIEmbeddings(
         model=GOOGLE_EMBEDDING_MODEL_NAME,
@@ -58,31 +56,92 @@ def get_website_text(url):
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
+        # YENİ: İçerik tipini kontrol et (isteğe bağlı ama iyi bir pratik)
+        content_type = response.headers.get('content-type', '').lower()
+        if 'text/html' not in content_type:
+            # st.warning(f"URL '{url}' HTML içeriği döndürmedi (Tip: {content_type}). Atlanıyor.")
+            print(f"URL '{url}' HTML içeriği döndürmedi (Tip: {content_type}). Atlanıyor.")
+            return "" # Veya None, işleme mantığınıza göre
+
         soup = BeautifulSoup(response.content, 'lxml')
-        for script_or_style in soup(["script", "style", "header", "footer", "nav", "aside", "form", "noscript", "iframe", "button", "select", "input"]):
+        for script_or_style in soup(["script", "style", "header", "footer", "nav", "aside", "form", "noscript", "iframe", "button", "select", "input", "img", "svg", "link", "meta"]): # Daha fazla gereksiz etiket
             script_or_style.decompose()
+        
         body = soup.find('body')
         if body:
-            text_nodes = body.find_all(string=True) # Sadece metin düğümlerini al
-            visible_text = ""
-            for t_node in text_nodes:
-                # Ebeveyn etiketlerinin görünür olup olmadığını kontrol et (basit bir kontrol)
-                parent = t_node.parent
-                if parent.name not in ['style', 'script', 'head', 'title', 'meta', '[document]'] and not isinstance(t_node, Comment):
-                    stripped_text = t_node.strip()
-                    if stripped_text:
-                        visible_text += stripped_text + "\n" # Her metin bloğunu yeni satıra
+            # text_nodes = body.find_all(string=True)
+            # visible_text = ""
+            # for t_node in text_nodes:
+            #     parent = t_node.parent
+            #     if parent.name not in ['style', 'script', 'head', 'title', 'meta', '[document]'] and not isinstance(t_node, Comment):
+            #         stripped_text = t_node.strip()
+            #         if stripped_text:
+            #             visible_text += stripped_text + "\n"
+            # cleaned_text = "\n".join([line.strip() for line in visible_text.splitlines() if line.strip()])
             
-            # Çoklu boşlukları ve satırları tek bir taneye indirge
-            cleaned_text = "\n".join([line.strip() for line in visible_text.splitlines() if line.strip()])
+            # Daha iyi bir metin çıkarma yöntemi:
+            paragraphs = body.find_all(['p', 'div', 'span', 'article', 'section', 'td', 'li']) # Daha fazla potansiyel metin içeren etiket
+            cleaned_text = ""
+            for tag in paragraphs:
+                text_content = tag.get_text(separator=' ', strip=True)
+                if text_content: # Sadece anlamlı içeriği olanları ekle
+                    # Kısa, anlamsız stringleri filtrele (örneğin, sadece navigasyon linkleri vb.)
+                    # Bu kısım daha da geliştirilebilir.
+                    if len(text_content.split()) > 3: # En az 3 kelime varsa al gibi bir basit kural
+                         cleaned_text += text_content + "\n\n" # Paragraflar arasına boşluk
+
+            # Çoklu boşlukları ve satırları tek bir taneye indirge (son bir temizlik)
+            cleaned_text = "\n".join([line.strip() for line in cleaned_text.splitlines() if line.strip()])
             return cleaned_text
         return ""
     except requests.exceptions.RequestException as e:
-        st.error(f"Web sitesi içeriği çekilirken hata: {url} - {e}")
-        return None
+        st.warning(f"Web sitesi içeriği çekilirken hata: {url} - {e}") # st.error yerine warning
+        return "" # Boş string döndür, akışı kesmesin
     except Exception as e:
-        st.error(f"Web sitesi içeriği işlenirken beklenmedik hata: {url} - {e}")
-        return None
+        st.warning(f"Web sitesi içeriği işlenirken beklenmedik hata: {url} - {e}") # st.error yerine warning
+        return "" # Boş string döndür
+
+# YENİ: Web Arama Fonksiyonu
+def search_web_for_query(query, num_results=3):
+    """
+    Verilen sorgu için web'de arama yapar ve ilk N sonucun URL'lerini döndürür.
+    """
+    results = []
+    try:
+        with DDGS() as ddgs:
+            search_results = list(ddgs.text(query, region='wt-wt', safesearch='moderate', max_results=num_results*2)) # Biraz fazla alıp filtreleyelim
+            # Sadece geçerli URL'leri ve kısa olanları filtrele (örneğin PDF, DOC linkleri değil)
+            count = 0
+            for r in search_results:
+                if r.get('href') and r['href'].startswith('http') and \
+                   not any(ext in r['href'].lower() for ext in ['.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.zip', '.rar']):
+                    results.append(r['href'])
+                    count += 1
+                    if count >= num_results:
+                        break
+            if not results and search_results: # Hiç uygun URL bulunamadıysa ilkini almayı dene
+                if search_results[0].get('href'):
+                     results.append(search_results[0]['href'])
+    except Exception as e:
+        st.error(f"Web araması sırasında hata: {e}")
+    return results
+
+# YENİ: Web İçeriği Özetleme için Prompt Şablonu
+def get_web_summary_prompt_template():
+    prompt_template_str = """
+    SENİN GÖREVİN: Kullanıcının bir sorgusu üzerine web'den aşağıdaki "Bağlam:" bölümünde çeşitli sayfalardan bilgiler toplandı.
+    Bu bilgileri kullanarak, kullanıcının orijinal sorgusuna yanıt veren, anlaşılır, tarafsız ve kapsamlı bir özet oluştur.
+    Özetin SADECE sağlanan "Bağlam:" içindeki bilgilere dayanmalıdır.
+    Eğer sağlanan bağlam yetersizse veya konuyla alakasızsa, "Sağlanan web sayfalarından bu sorgu için yeterli bilgi çıkarılamadı." yanıtını ver.
+    Yanıtını doğrudan özetle başlat.
+
+    Bağlam:
+    {context}
+
+    Kullanıcının Orijinal Sorgusu: {original_query}
+
+    Özet Cevap:"""
+    return PromptTemplate(template=prompt_template_str, input_variables=["context", "original_query"])
 
 # --- Diğer Yardımcı Fonksiyonlar ---
 def get_pdf_text(pdf_docs):
@@ -99,23 +158,21 @@ def get_pdf_text(pdf_docs):
 
 def get_text_chunks(text):
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1500, # Biraz daha büyük chunklar web içeriği için iyi olabilir
+        chunk_size=1500, 
         chunk_overlap=250,
         length_function=len,
-        separators=["\n\n", "\n", " ", ""] # Daha çeşitli ayırıcılar
+        separators=["\n\n", "\n", " ", ""]
     )
     return text_splitter.split_text(text)
 
 def create_vector_store_from_chunks(text_chunks, current_embeddings_model):
     if not text_chunks or not current_embeddings_model:
-        # st.warning("Vektör deposu oluşturmak için yetersiz veri veya model.") # Hata mesajını çağıran yer versin
         return None
     try:
         return FAISS.from_texts(texts=text_chunks, embedding=current_embeddings_model)
     except Exception as e:
         st.error(f"Vektör deposu oluşturulurken hata: {e}"); st.error(traceback.format_exc()); return None
 
-# GÜNCELLENMİŞ PROMPT ŞABLONU
 def get_conversational_chain_prompt_template():
     prompt_template_str = """
     SENİN GÖREVİN: Sen, kullanıcı tarafından sağlanan bir metin kaynağındaki (bu bir PDF veya bir web sitesi içeriği olabilir) bilgilere dayanarak soruları yanıtlayan son derece dikkatli ve kuralcı bir AI asistanısın. Temel amacın, kullanıcının sorularına SADECE ve YALNIZCA aşağıda "Bağlam:" olarak belirtilen metin içeriğinden yararlanarak cevap vermektir.
@@ -144,6 +201,7 @@ def get_conversational_chain_prompt_template():
 if "sessions" not in st.session_state: st.session_state.sessions = {}
 if "current_session_id" not in st.session_state: st.session_state.current_session_id = None
 if "prompt_template" not in st.session_state: st.session_state.prompt_template = get_conversational_chain_prompt_template()
+if "web_summary_prompt_template" not in st.session_state: st.session_state.web_summary_prompt_template = get_web_summary_prompt_template() # YENİ
 
 def create_new_session(session_type="pdf"):
     session_id = str(uuid.uuid4())
@@ -152,9 +210,9 @@ def create_new_session(session_type="pdf"):
     st.session_state.sessions[session_id] = {
         "id": session_id, "name": session_name,
         "source_type": session_type,
-        "source_info": None, # PDF adları listesi veya web sitesi URL'si
+        "source_info": None, 
         "vector_store": None, "chat_history": [], "processed": False,
-        "full_text_for_summary": None # Özetleme için tam metin
+        "full_text_for_summary": None 
     }
     st.session_state.current_session_id = session_id
     return session_id
@@ -188,7 +246,7 @@ with st.sidebar:
     }
 
     if not session_options and st.session_state.current_session_id is None:
-        create_new_session(); st.rerun()
+        create_new_session(); st.rerun() # Varsayılan olarak bir PDF sohbeti oluşturabilir veya kullanıcıya seçtirebilir.
 
     if session_options:
         current_index = 0
@@ -272,61 +330,114 @@ if active_session_data:
         source_display = current_source_info
         if isinstance(source_display, list): source_display = ", ".join(source_display)
         st.caption(f"Mevcut Kaynak: {source_display}")
-    else:
-        st.caption("Bu oturum için henüz bir kaynak işlenmedi.")
-
+    # YENİ: Web arama komutu için bilgi
+    # else:
+    #     st.caption("Bu oturum için henüz bir kaynak işlenmedi. Web'de arama yapmak için 'ara: [sorgunuz]' yazabilirsiniz.")
+    
+    # YENİ: Web arama tetikleyici
+    WEB_SEARCH_TRIGGER = "ara:" 
+    # veya st.checkbox("Web'de Ara") gibi bir UI elemanı da kullanabilirsiniz.
 
     for message in active_session_data["chat_history"]:
         with st.chat_message(message["role"]): st.markdown(message["content"])
 
-    if user_query := st.chat_input(f"Kaynak hakkında soru sorun..."):
-        can_answer = active_session_data.get("processed", False) and \
-                     (active_session_data.get("vector_store") or active_session_data.get("full_text_for_summary"))
-        
-        if not can_answer:
-            st.warning("Lütfen önce kenar çubuğundan bu oturum için bir kaynak (PDF/Web Sitesi) yükleyip işleyin.")
-        else:
-            active_session_data["chat_history"].append({"role": "user", "content": user_query})
-            with st.chat_message("user"): st.markdown(user_query)
-            with st.chat_message("assistant"):
-                message_placeholder = st.empty(); full_response_text = ""
-                try:
-                    context_text = ""
-                    summary_keywords = ["özetle", "ne anlatıyor", "konusu ne", "ana fikir", "genel olarak", "genel bakış", "kısaca", "summarize", "what is it about", "main idea", "overview", "gist", "tell me about this document"]
-                    is_summary_request = any(keyword in user_query.lower() for keyword in summary_keywords)
-
-                    if is_summary_request and active_session_data.get("full_text_for_summary"):
-                        context_text = active_session_data["full_text_for_summary"]
-                        MAX_CONTEXT_CHARS = 700000 # Gemini 1.5 Flash için geniş bir limit, gerekirse küçültün
-                        if len(context_text) > MAX_CONTEXT_CHARS:
-                            context_text = context_text[:MAX_CONTEXT_CHARS] + "\n\n... (metin özet için çok uzundu ve kısaltıldı)"
-                            # st.caption(f"Not: Kaynak metni {MAX_CONTEXT_CHARS} karakter ile sınırlandırıldı.")
-                    
-                    elif active_session_data.get("vector_store"): # Spesifik sorular için
-                        docs = active_session_data["vector_store"].similarity_search(query=user_query, k=5) # chunk sayısını ayarlayabilirsiniz
-                        if docs:
-                            context_text = "\n\n".join([doc.page_content for doc in docs])
-                    
-                    if not context_text: # Eğer hiçbir şekilde bağlam oluşturulamadıysa
-                        full_response_text = "Bu bilgi sağlanan kaynakta (PDF/Web Sitesi) bulunmuyor."
-                    else:
-                        current_prompt_template = st.session_state.prompt_template
-                        formatted_prompt = current_prompt_template.format(context=context_text, question=user_query)
-                        
-                        # DEBUG: st.text_area("LLM'e Gönderilen Prompt", formatted_prompt, height=300)
-
-                        for chunk in llm_client.stream(formatted_prompt):
-                            if hasattr(chunk, 'content'):
-                                full_response_text += chunk.content
-                                message_placeholder.markdown(full_response_text + "▌")
-                            else: # Bazen stream farklı bir yapıda chunk döndürebilir
-                                print(f"Beklenmedik chunk yapısı: {chunk}")
-
+    if user_query := st.chat_input(f"Kaynak hakkında soru sorun veya '{WEB_SEARCH_TRIGGER} [sorgunuz]' ile web'de arayın..."):
+        active_session_data["chat_history"].append({"role": "user", "content": user_query})
+        with st.chat_message("user"): st.markdown(user_query)
+        with st.chat_message("assistant"):
+            message_placeholder = st.empty(); full_response_text = ""
+            
+            # YENİ: Web Arama Mantığı
+            if user_query.lower().startswith(WEB_SEARCH_TRIGGER):
+                search_term = user_query[len(WEB_SEARCH_TRIGGER):].strip()
+                if not search_term:
+                    full_response_text = "Lütfen aramak istediğiniz konuyu belirtin (örneğin: ara: Türkiye'nin başkenti)."
                     message_placeholder.markdown(full_response_text)
+                else:
+                    message_placeholder.markdown(f"'{search_term}' için web'de arama yapılıyor ve özetleniyor...")
+                    try:
+                        search_urls = search_web_for_query(search_term, num_results=3) # İlk 3 sonucu alalım
+                        if not search_urls:
+                            full_response_text = f"'{search_term}' için web'de sonuç bulunamadı."
+                        else:
+                            st.caption(f"Bulunan kaynaklar: {', '.join(search_urls)}") # DEBUG: Hangi URL'ler bulundu
+                            all_web_text = ""
+                            MAX_WEB_CONTENT_PER_PAGE = 10000 # Her sayfadan alınacak max karakter (çok uzun sayfalardan kaçınmak için)
+                            MAX_TOTAL_WEB_CONTENT = 50000 # LLM'e gönderilecek toplam max karakter
 
-                except Exception as e:
-                    st.error(f"Yanıt alınırken bir hata oluştu: {e}"); st.error(traceback.format_exc())
-                    full_response_text = "Üzgünüm, bir hata oluştu."; message_placeholder.markdown(full_response_text)
+                            for i, url in enumerate(search_urls):
+                                with st.spinner(f"'{url}' adresinden içerik çekiliyor... ({i+1}/{len(search_urls)})"):
+                                    page_text = get_website_text(url)
+                                if page_text:
+                                    all_web_text += f"\n\n--- {url} sayfasından içerik ---\n\n" + page_text[:MAX_WEB_CONTENT_PER_PAGE]
+                                if len(all_web_text) > MAX_TOTAL_WEB_CONTENT:
+                                    all_web_text = all_web_text[:MAX_TOTAL_WEB_CONTENT] + "\n\n... (içerik çok uzundu ve kısaltıldı)"
+                                    break
+                            
+                            if not all_web_text.strip():
+                                full_response_text = "Web sayfalarından anlamlı içerik çıkarılamadı."
+                            else:
+                                # DEBUG: st.text_area("Web'den Çekilen Toplam Metin", all_web_text, height=200)
+                                web_summary_prompt = st.session_state.web_summary_prompt_template.format(
+                                    context=all_web_text, 
+                                    original_query=search_term
+                                )
+                                # DEBUG: st.text_area("Web Özetleme Prompt'u", web_summary_prompt, height=200)
+                                for chunk in llm_client.stream(web_summary_prompt):
+                                    if hasattr(chunk, 'content'):
+                                        full_response_text += chunk.content
+                                        message_placeholder.markdown(full_response_text + "▌")
+                                if not full_response_text: # LLM boş döndürürse
+                                    full_response_text = "Sağlanan web sayfalarından bu sorgu için yeterli bilgi çıkarılamadı."
+                    except Exception as e:
+                        st.error(f"Web araması ve özetleme sırasında hata: {e}"); st.error(traceback.format_exc())
+                        full_response_text = "Üzgünüm, web araması sırasında bir hata oluştu."
+                    message_placeholder.markdown(full_response_text)
+            
+            # Mevcut RAG (PDF/Web Sitesi) mantığı
+            else:
+                can_answer_from_source = active_session_data.get("processed", False) and \
+                                         (active_session_data.get("vector_store") or active_session_data.get("full_text_for_summary"))
+                
+                if not can_answer_from_source:
+                    full_response_text = "Lütfen önce kenar çubuğundan bu oturum için bir kaynak (PDF/Web Sitesi) yükleyip işleyin veya web'de arama yapmak için 'ara: [sorgunuz]' komutunu kullanın."
+                    message_placeholder.markdown(full_response_text)
+                else:
+                    try:
+                        context_text = ""
+                        summary_keywords = ["özetle", "ne anlatıyor", "konusu ne", "ana fikir", "genel olarak", "genel bakış", "kısaca", "summarize", "what is it about", "main idea", "overview", "gist", "tell me about this document"]
+                        is_summary_request = any(keyword in user_query.lower() for keyword in summary_keywords)
+
+                        if is_summary_request and active_session_data.get("full_text_for_summary"):
+                            context_text = active_session_data["full_text_for_summary"]
+                            MAX_CONTEXT_CHARS = 700000 
+                            if len(context_text) > MAX_CONTEXT_CHARS:
+                                context_text = context_text[:MAX_CONTEXT_CHARS] + "\n\n... (metin özet için çok uzundu ve kısaltıldı)"
+                        
+                        elif active_session_data.get("vector_store"): 
+                            docs = active_session_data["vector_store"].similarity_search(query=user_query, k=5) 
+                            if docs:
+                                context_text = "\n\n".join([doc.page_content for doc in docs])
+                        
+                        if not context_text: 
+                            full_response_text = "Bu bilgi sağlanan kaynakta (PDF/Web Sitesi) bulunmuyor."
+                        else:
+                            current_prompt_template = st.session_state.prompt_template
+                            formatted_prompt = current_prompt_template.format(context=context_text, question=user_query)
+                            
+                            for chunk in llm_client.stream(formatted_prompt):
+                                if hasattr(chunk, 'content'):
+                                    full_response_text += chunk.content
+                                    message_placeholder.markdown(full_response_text + "▌")
+                                else: 
+                                    print(f"Beklenmedik chunk yapısı: {chunk}")
+
+                        message_placeholder.markdown(full_response_text)
+
+                    except Exception as e:
+                        st.error(f"Yanıt alınırken bir hata oluştu: {e}"); st.error(traceback.format_exc())
+                        full_response_text = "Üzgünüm, bir hata oluştu."; message_placeholder.markdown(full_response_text)
+            
             active_session_data["chat_history"].append({"role": "assistant", "content": full_response_text})
 else:
     st.info("Lütfen kenar çubuğundan bir sohbet seçin veya yeni bir tane başlatın.")
