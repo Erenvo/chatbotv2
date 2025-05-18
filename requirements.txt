@@ -12,3 +12,4 @@ lxml             # YENİ (BeautifulSoup için)
 trafilatura    # İsteğe bağlı, daha gelişmiş web scraping için
 langchain_community
 openai
+duckduckgo-search
