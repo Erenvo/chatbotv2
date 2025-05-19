@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 st.set_page_config(page_title="Çok Kaynaklı AI Asistanı", page_icon="🌐")
 # -----------------------------------------------------------------------------
 
+#Naber la
 # --- API Konfigürasyonu (Örnek: Google AI) ---
 GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY")
 GOOGLE_LLM_MODEL_NAME = st.secrets.get("GOOGLE_LLM_MODEL_NAME", "gemini-1.5-flash-latest")
