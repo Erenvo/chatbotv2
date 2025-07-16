@@ -1,5 +1,3 @@
-# --- START OF FILE app2.py ---
-
 import streamlit as st
 import os
 from PyPDF2 import PdfReader
@@ -28,21 +26,31 @@ if not GOOGLE_API_KEY:
     st.error("Google API anahtarı bulunamadı! Lütfen Streamlit Secrets bölümünü kontrol edin.")
     st.stop()
 
+# LLM istemcisini hemen oluştur
 try:
     llm_client = ChatGoogleGenerativeAI(
         model=GOOGLE_LLM_MODEL_NAME,
         google_api_key=GOOGLE_API_KEY,
         temperature=0.15,
     )
-    embeddings_model_global = GoogleGenerativeAIEmbeddings(
-        model=GOOGLE_EMBEDDING_MODEL_NAME,
-        google_api_key=GOOGLE_API_KEY
-    )
-    print("Google AI istemcileri başarıyla bağlandı.")
+    print("Google AI LLM istemcisi başarıyla bağlandı.")
 except Exception as e:
-    st.error(f"AI istemcileri oluşturulurken hata: {e}")
+    st.error(f"AI LLM istemcisi oluşturulurken hata: {e}")
     st.error(traceback.format_exc())
     st.stop()
+
+# Embeddings modelini lazy loading ile oluştur
+def get_embeddings_model():
+    """Embeddings modelini ihtiyaç duyulduğunda oluştur"""
+    try:
+        return GoogleGenerativeAIEmbeddings(
+            model=GOOGLE_EMBEDDING_MODEL_NAME,
+            google_api_key=GOOGLE_API_KEY
+        )
+    except Exception as e:
+        st.error(f"Embeddings modeli oluşturulurken hata: {e}")
+        st.error(traceback.format_exc())
+        return None
 
 # --- Web Sitesi İçeriği Çekme Fonksiyonu ---
 def get_website_text(url):
@@ -99,9 +107,17 @@ def get_text_chunks(text):
     )
     return text_splitter.split_text(text)
 
-def create_vector_store_from_chunks(text_chunks, current_embeddings_model):
-    if not text_chunks or not current_embeddings_model:
+def create_vector_store_from_chunks(text_chunks, current_embeddings_model=None):
+    if not text_chunks:
         return None
+    
+    # Embeddings modelini ihtiyaç duyulduğunda oluştur
+    if current_embeddings_model is None:
+        current_embeddings_model = get_embeddings_model()
+        if current_embeddings_model is None:
+            st.error("Embeddings modeli oluşturulamadı.")
+            return None
+    
     try:
         valid_chunks = [chunk for chunk in text_chunks if chunk.strip()]
         if not valid_chunks:
@@ -109,7 +125,9 @@ def create_vector_store_from_chunks(text_chunks, current_embeddings_model):
             return None
         return FAISS.from_texts(texts=valid_chunks, embedding=current_embeddings_model)
     except Exception as e:
-        st.error(f"Vektör deposu oluşturulurken hata: {e}"); st.error(traceback.format_exc()); return None
+        st.error(f"Vektör deposu oluşturulurken hata: {e}")
+        st.error(traceback.format_exc())
+        return None
 
 def get_conversational_chain_prompt_template():
     prompt_template_str = """
@@ -240,12 +258,15 @@ with st.sidebar:
                                     if not text_chunks:
                                         st.error("Metin parçalara ayrılamadı."); active_session["processed"] = False
                                     else:
-                                        vector_store = create_vector_store_from_chunks(text_chunks, embeddings_model_global)
+                                        vector_store = create_vector_store_from_chunks(text_chunks)
                                         if vector_store:
-                                            active_session["vector_store"] = vector_store; active_session["processed"] = True
-                                            st.success(f"PDF başarıyla işlendi."); st.rerun()
+                                            active_session["vector_store"] = vector_store
+                                            active_session["processed"] = True
+                                            st.success(f"PDF başarıyla işlendi.")
+                                            st.rerun()
                                         else:
-                                            st.error("Vektör deposu oluşturulamadı."); active_session["processed"] = False
+                                            st.error("Vektör deposu oluşturulamadı.")
+                                            active_session["processed"] = False
                     else: st.warning("Lütfen PDF dosyası yükleyin.")
             
             # Kenar çubuğundan URL işleme (isteğe bağlı, ana yöntem chat komutu)
@@ -274,17 +295,20 @@ with st.sidebar:
                                     if not text_chunks:
                                         st.error("Metin parçalara ayrılamadı."); active_session["processed"] = False
                                     else:
-                                        vector_store = create_vector_store_from_chunks(text_chunks, embeddings_model_global)
+                                        vector_store = create_vector_store_from_chunks(text_chunks)
                                         if vector_store:
-                                            active_session["vector_store"] = vector_store; active_session["processed"] = True
+                                            active_session["vector_store"] = vector_store
+                                            active_session["processed"] = True
                                             try: # Oturum adını güncelle
                                                 parsed_url = urlparse(website_url)
                                                 domain = parsed_url.netloc
                                                 if domain: active_session["name"] = f"Web: {domain.replace('www.','')}"
                                             except: pass
-                                            st.success(f"Web sitesi (sidebar) başarıyla işlendi."); st.rerun()
+                                            st.success(f"Web sitesi (sidebar) başarıyla işlendi.")
+                                            st.rerun()
                                         else:
-                                            st.error("Vektör deposu oluşturulamadı."); active_session["processed"] = False
+                                            st.error("Vektör deposu oluşturulamadı.")
+                                            active_session["processed"] = False
                     elif website_url: st.warning("Lütfen geçerli bir URL girin.")
                     else: st.warning("Lütfen bir URL girin.")
 
@@ -354,7 +378,7 @@ if active_session_data:
                                 full_response_text = "Web sitesinden metin parçalara ayrılamadı. Lütfen farklı bir URL deneyin veya sayfanın metin içeriği olduğundan emin olun."
                                 active_session_data["processed"] = False
                             else:
-                                vector_store = create_vector_store_from_chunks(text_chunks, embeddings_model_global)
+                                vector_store = create_vector_store_from_chunks(text_chunks)
                                 if vector_store:
                                     active_session_data["vector_store"] = vector_store
                                     active_session_data["processed"] = True
@@ -459,5 +483,3 @@ else:
 st.sidebar.markdown("---")
 st.sidebar.caption(f"LLM: {GOOGLE_LLM_MODEL_NAME}")
 st.sidebar.caption(f"Embedding: {GOOGLE_EMBEDDING_MODEL_NAME}")
-
-# --- END OF FILE app2.py ---
