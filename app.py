@@ -28,10 +28,12 @@ if not GOOGLE_API_KEY:
 
 # LLM istemcisini hemen oluştur
 try:
+    # DÜZELTME: Asenkron döngü hatalarını önlemek için transport="rest" eklendi.
     llm_client = ChatGoogleGenerativeAI(
         model=GOOGLE_LLM_MODEL_NAME,
         google_api_key=GOOGLE_API_KEY,
         temperature=0.15,
+        transport="rest",
     )
     print("Google AI LLM istemcisi başarıyla bağlandı.")
 except Exception as e:
@@ -43,9 +45,11 @@ except Exception as e:
 def get_embeddings_model():
     """Embeddings modelini ihtiyaç duyulduğunda oluştur"""
     try:
+        # DÜZELTME: Asenkron döngü (event loop) hatasını gidermek için transport="rest" eklendi.
         return GoogleGenerativeAIEmbeddings(
             model=GOOGLE_EMBEDDING_MODEL_NAME,
-            google_api_key=GOOGLE_API_KEY
+            google_api_key=GOOGLE_API_KEY,
+            transport="rest"
         )
     except Exception as e:
         st.error(f"Embeddings modeli oluşturulurken hata: {e}")
@@ -186,10 +190,10 @@ def delete_session(session_id_to_delete):
         del st.session_state.sessions[session_id_to_delete]
         if st.session_state.current_session_id == session_id_to_delete:
             st.session_state.current_session_id = None
-            if st.session_state.sessions: 
+            if st.session_state.sessions:
                 st.session_state.current_session_id = list(st.session_state.sessions.keys())[0]
-            else: 
-                 create_new_session() 
+            else:
+                 create_new_session()
                  st.rerun()
 
 st.title("🌐 Çok Kaynaklı AI Asistanı")
@@ -209,7 +213,7 @@ with st.sidebar:
     }
 
     if not st.session_state.sessions and st.session_state.current_session_id is None: # Hiç oturum yoksa
-        create_new_session() 
+        create_new_session()
         st.rerun()
     elif not st.session_state.current_session_id and st.session_state.sessions: # Oturum var ama seçili değilse
         st.session_state.current_session_id = list(st.session_state.sessions.keys())[0]
@@ -220,7 +224,7 @@ with st.sidebar:
         current_index = 0
         if st.session_state.current_session_id and st.session_state.current_session_id in st.session_state.sessions:
             current_index = list(st.session_state.sessions.keys()).index(st.session_state.current_session_id)
-        
+
         selected_session_id = st.selectbox(
             "Aktif Sohbet:", options=list(st.session_state.sessions.keys()),
             format_func=lambda sid: session_options.get(sid, "Bilinmeyen Oturum"),
@@ -231,9 +235,9 @@ with st.sidebar:
             st.session_state.current_session_id = selected_session_id; st.rerun()
 
         active_session = get_active_session_data()
-        if active_session: 
+        if active_session:
             st.markdown("---"); st.subheader(f"Düzenle: {active_session['name']}")
-            raw_text_from_source = None 
+            raw_text_from_source = None
 
             if active_session["source_type"] == "pdf":
                 uploader_key = f"pdf_uploader_{active_session['id']}"
@@ -243,13 +247,13 @@ with st.sidebar:
                         active_session["source_info"] = [f.name for f in uploaded_files]
                         with st.spinner("PDF içeriği okunuyor..."):
                            raw_text_from_source = get_pdf_text(uploaded_files)
-                        
+
                         if raw_text_from_source is not None:
                             with st.spinner("Kaynak işleniyor... (PDF)"):
                                 active_session["full_text_for_summary"] = raw_text_from_source
-                                active_session["chat_history"] = [] 
+                                active_session["chat_history"] = []
                                 active_session["vector_store"] = None
-                                
+
                                 if not raw_text_from_source.strip():
                                     st.error("PDF'ten metin çıkarılamadı veya boş.")
                                     active_session["processed"] = False; active_session["full_text_for_summary"] = None
@@ -268,25 +272,25 @@ with st.sidebar:
                                             st.error("Vektör deposu oluşturulamadı.")
                                             active_session["processed"] = False
                     else: st.warning("Lütfen PDF dosyası yükleyin.")
-            
+
             # Kenar çubuğundan URL işleme (isteğe bağlı, ana yöntem chat komutu)
             elif active_session["source_type"] == "website" and not active_session.get("processed"): # Sadece işlenmemiş web sohbetleri için göster
                 url_input_key = f"url_input_sidebar_{active_session['id']}"
                 current_url_val = active_session.get("source_info", "") if isinstance(active_session.get("source_info"), str) else ""
                 website_url = st.text_input("Web sitesi URL'si (Kenar Çubuğu):", key=url_input_key, value=current_url_val, placeholder="https://ornek.com/sayfa", label_visibility="collapsed")
-                
+
                 if st.button("Web Sitesini İşle (Kenar Çubuğu)", key=f"process_web_sidebar_{active_session['id']}", use_container_width=True):
                     if website_url and website_url.startswith(("http://", "https://")):
                         active_session["source_info"] = website_url
                         with st.spinner(f"İçerik çekiliyor: {website_url}"):
                             raw_text_from_source = get_website_text(website_url)
-                        
+
                         if raw_text_from_source is not None:
                             with st.spinner("Kaynak işleniyor... (Web - Sidebar)"):
                                 active_session["full_text_for_summary"] = raw_text_from_source
                                 active_session["chat_history"] = []
                                 active_session["vector_store"] = None
-                                
+
                                 if not raw_text_from_source.strip():
                                     st.error("Web sitesinden metin çıkarılamadı veya boş.")
                                     active_session["processed"] = False; active_session["full_text_for_summary"] = None
@@ -345,9 +349,9 @@ if active_session_data:
             chat_input_placeholder = "PDF'leri kenar çubuğundan yükleyip işleyin."
         elif active_session_data["source_type"] == "website":
             chat_input_placeholder = f"Bir web sitesini işlemek için '{PROCESS_URL_TRIGGER} [adres]' yazın veya kenar çubuğunu kullanın."
-        else: 
+        else:
              chat_input_placeholder = f"PDF için kenar çubuğunu kullanın veya '{PROCESS_URL_TRIGGER} [adres]' ile web sitesi işleyin."
-    else: 
+    else:
         chat_input_placeholder = f"İşlenmiş kaynak hakkında soru sorun veya '{PROCESS_URL_TRIGGER} [adres]' ile yeni URL işleyin."
 
 
@@ -367,7 +371,7 @@ if active_session_data:
                         raw_text_from_source = get_website_text(url_to_process)
                         if raw_text_from_source and raw_text_from_source.strip():
                             active_session_data["source_info"] = url_to_process
-                            active_session_data["source_type"] = "website" 
+                            active_session_data["source_type"] = "website"
                             active_session_data["full_text_for_summary"] = raw_text_from_source
                             active_session_data["chat_history"] = [
                                 {"role": "user", "content": user_query}
@@ -392,13 +396,13 @@ if active_session_data:
                                     except Exception as name_ex:
                                         print(f"URL'den isim alınamadı: {name_ex}")
                                         active_session_data["name"] = f"Web: {url_to_process[:30]}..."
-                                    
+
                                     full_response_text = f"İçerik `{url_to_process}` adresinden başarıyla işlendi. Artık bu kaynak hakkında soru sorabilirsiniz."
                                     # Asistan mesajını geçmişe eklemeden önce rerun yapalım ki UI güncellensin
                                     st.session_state.sessions[active_session_data["id"]]["chat_history"].append(
                                         {"role": "assistant", "content": full_response_text}
                                     )
-                                    st.rerun() 
+                                    st.rerun()
                                 else:
                                     full_response_text = "Web sitesi içeriği için vektör deposu oluşturulamadı. Metin parçaları geçerli olmayabilir."
                                     active_session_data["processed"] = False
@@ -413,11 +417,11 @@ if active_session_data:
                 else:
                     full_response_text = "Lütfen geçerli bir URL girin (örneğin: url: https://ornek.com)."
                     message_placeholder.markdown(full_response_text)
-            
+
             else: # Normal soru-cevap veya özetleme
                 can_answer_from_source = active_session_data.get("processed", False) and \
                                          (active_session_data.get("vector_store") or active_session_data.get("full_text_for_summary"))
-                
+
                 if not can_answer_from_source:
                     if active_session_data["source_type"] == "pdf":
                          full_response_text = "Lütfen önce kenar çubuğundan bu oturum için PDF dosyalarını yükleyip işleyin."
@@ -426,7 +430,7 @@ if active_session_data:
                     else:
                         full_response_text = f"Lütfen önce bir kaynak sağlayın. PDF için kenar çubuğunu, web sitesi için '{PROCESS_URL_TRIGGER} [URL]' komutunu kullanın."
                     message_placeholder.markdown(full_response_text)
-                else: 
+                else:
                     try:
                         context_text = ""
                         summary_keywords = ["özet", "özetle", "ne anlatıyor", "konusu ne", "ana fikir", "genel olarak", "genel bakış", "kısaca", "summarize", "what is it about", "main idea", "overview", "gist", "tell me about this document"]
@@ -434,16 +438,16 @@ if active_session_data:
 
                         if is_summary_request and active_session_data.get("full_text_for_summary"):
                             context_text = active_session_data["full_text_for_summary"]
-                            MAX_CONTEXT_CHARS = 700000 
+                            MAX_CONTEXT_CHARS = 700000
                             if len(context_text) > MAX_CONTEXT_CHARS:
                                 context_text = context_text[:MAX_CONTEXT_CHARS] + "\n\n... (metin özet için çok uzundu ve kısaltıldı)"
-                        
-                        elif active_session_data.get("vector_store"): 
-                            docs = active_session_data["vector_store"].similarity_search(query=user_query, k=5) 
+
+                        elif active_session_data.get("vector_store"):
+                            docs = active_session_data["vector_store"].similarity_search(query=user_query, k=5)
                             if docs:
                                 context_text = "\n\n".join([doc.page_content for doc in docs])
-                        
-                        if not context_text: 
+
+                        if not context_text:
                             if is_summary_request:
                                 full_response_text = "Kaynak metni özetleme için çok kısa veya boş."
                             else:
@@ -451,12 +455,12 @@ if active_session_data:
                         else:
                             current_prompt_template = st.session_state.prompt_template
                             formatted_prompt = current_prompt_template.format(context=context_text, question=user_query)
-                            
+
                             for chunk_resp in llm_client.stream(formatted_prompt):
                                 if hasattr(chunk_resp, 'content'):
                                     full_response_text += chunk_resp.content
                                     message_placeholder.markdown(full_response_text + "▌")
-                                else: 
+                                else:
                                     print(f"Beklenmedik chunk yapısı: {chunk_resp}")
 
                         if not full_response_text.strip() and not context_text:
@@ -471,7 +475,7 @@ if active_session_data:
                     except Exception as e:
                         st.error(f"Yanıt alınırken bir hata oluştu: {e}"); st.error(traceback.format_exc())
                         full_response_text = "Üzgünüm, yanıt işlenirken bir hata oluştu."; message_placeholder.markdown(full_response_text)
-            
+
             # `url:` komutu işlendiğinde ve rerun yapıldığında bu satır çalışmayacak,
             # çünkü rerun sonrası asistan mesajı zaten history'e eklenmiş olacak.
             # Diğer durumlarda (normal soru-cevap) asistan mesajı burada eklenir.
